@@ -54,20 +54,27 @@ def convert_raw_data(project_dir):
     """
     ## We have 5 sticks, loop through them and get the q for all measurements. save them to csv file for later use.
     for metingnr in range(1,6):
+        ## Get the measurements numbers
         start_measurement, amount_measurements = MEASUREMENTS[metingnr]
+
+        ## check which index to start itterating from.
         start_measurement_index = MEASUREMENT_NRS.index(start_measurement)
+
+        ## open csv to note results.
         with open(f"{project_dir}\\output\\output_meting_{metingnr}.csv", 'w+') as f:
             writer = csv.writer(f, lineterminator="\n")
             header = ["q","k_before","k_after","u_height","k_stick","q_error", "k_before_error", "k_after_error", "u_height_error", "k_stick_error"]
             writer.writerow(header)
+
+            ## loop over the measurements and calculate q, write the results to the csv for later processing.
             for i in range(amount_measurements):
                 q, k_before, k_after, u_height, k_stick, q_error, k_before_error, k_after_error, u_height_error, k_stick_error = get_q(project_dir, metingnr, start_measurement_index + i, i+1)
-                print(f""" Measurement: {MEASUREMENT_NRS[start_measurement_index + i]}\n
-                        Ratio of energy lost: {q}\n
-                        Kinetic energy before collision: {k_before} joule\n
-                        Kinetic energy after collision: {k_after} joule\n
-                        Hockey stick rotation energy: {k_stick} joule\n
-                        Ball height energy energy: {u_height} joule\n
+                print(f"""Measurement {MEASUREMENT_NRS[start_measurement_index + i]}:
+    Ratio of energy lost: {q}
+    Kinetic energy before collision: {k_before} joule
+    Kinetic energy after collision: {k_after} joule
+    Hockey stick rotation energy: {k_stick} joule
+    Ball height energy energy: {u_height} joule\n
                     """)
                 writer.writerow([q, k_before, k_after, u_height, k_stick, q_error, k_before_error, k_after_error, u_height_error, k_stick_error])
 
@@ -108,9 +115,8 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
     ball_data_after *= PIXEL_SCALING_FACTOR / 100
     hockey_data = hockey_data.with_columns([(pl.col(["X","Y"]) / 100)])
 
-    ## Get the mean velocity before collision, since we said air resistance is negligable
-    ## there are no forces acting (horizontally) on our ball so the speed should be constant.
-    ## Divide by DIFF_N and multiply by FPS to get per seconds instead of per N frames.
+    ## Get the ball's velocity using a linear fit. The slope of the fit is equal to the ball's velocity.
+    ## The stderr of the fit is the error in the velocity.
     def get_velocities(places, error):
         ## Get the time and weights for the model.
         time = np.array([i/FPS for i in range(places.len())])
@@ -126,37 +132,22 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
 
         return slope_parameter.value, slope_parameter.stderr
     velocity, velocity_error = get_velocities(ball_data_before["x"], TRACKING_ACCURACY_METERS)
-    # velocities = ball_data_before["x"].diff(n = DIFF_N) / DIFF_N * FPS
-    # velocities_error = velocities.rolling_std(window_size= ROLLING_MEAN_N).mean()
 
-    # rolling_mean_velocities =  velocities.rolling_mean(window_size = ROLLING_MEAN_N).drop_nulls()
-    # mean_velocity_before = cast(float,rolling_mean_velocities[-1])
-    # assert isinstance(mean_velocity_before, (float))
-    # assert isinstance(velocities_error, (float))
+    ## K = 1/2mv^2
     energy_before = 0.5 * BALL_WEIGHT * velocity ** 2
     energy_before_error = energy_before * np.sqrt((BALL_WEIGHT_ERROR/BALL_WEIGHT)**2 + (2*velocity_error/velocity)**2)
 
+
     ## Get the kinetic energy of the ball.
-    #
+    ## We use a linear fit for the velocity and then the kinetic energy formula to determine the energy.
     ball_place = (ball_data_after["x"]**2 + ball_data_after["y"]**2).sqrt()
-    ball_error = np.sqrt(2) * TRACKING_ACCURACY_METERS
+    ## Summing in quadrature of with same uncertainty doesnt change the uncertainty.
+    ball_error = TRACKING_ACCURACY_METERS
     ball_velocity, ball_velocity_error = get_velocities(ball_place, ball_error)
 
-    # ##########################
-    # ball_x_velocity = ball_data_after["x"].diff(n = DIFF_N) / DIFF_N * FPS
-    # ball_y_velocity = ball_data_after["y"].diff(n = DIFF_N) / DIFF_N * FPS
-    # ball_velocity_squared_array =  ball_x_velocity ** 2 + ball_y_velocity ** 2
-    # ball_velocity_array = ball_velocity_squared_array.sqrt()
-
-    # ball_velocity = np.sqrt(ball_velocity_squared_array.rolling_mean(window_size = ROLLING_MEAN_N).drop_nulls()[0])
-    # ball_velocity_error = ball_velocity_array.rolling_std(window_size= ROLLING_MEAN_N).mean()
-    # assert isinstance(ball_velocity_error, float)
-    # ###########################
-
+    ## K = 1/2mv^2
     ball_kinetic_energy = 0.5 * BALL_WEIGHT * ball_velocity**2
-    energy_before_error = ball_kinetic_energy * np.sqrt((BALL_WEIGHT_ERROR/BALL_WEIGHT)**2 + (2*ball_velocity_error/ball_velocity)**2)
-    assert isinstance(ball_kinetic_energy, (float))
-
+    ball_kinetic_energy_error = ball_kinetic_energy * np.sqrt((BALL_WEIGHT_ERROR/BALL_WEIGHT)**2 + (2*ball_velocity_error/ball_velocity)**2)
 
 
     ## Calculate the energy going to height.
@@ -164,6 +155,7 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
     rolling_mean_height_after = ball_data_after["y"].rolling_mean(window_size = ROLLING_MEAN_N).drop_nulls()
     rolling_mean_height_before = ball_data_before["y"].rolling_mean(window_size = ROLLING_MEAN_N).drop_nulls()
     height_difference =  cast(float, rolling_mean_height_after[0]) - cast(float, rolling_mean_height_before[-1])
+    ## U = m*g*h
     height_energy_gained = BALL_WEIGHT * GRAVITATIONAL_ACCELERATION * height_difference
     height_energy_gained_error = np.sqrt(
         (GRAVITATIONAL_ACCELERATION
@@ -173,16 +165,15 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
            * ball_velocity_error)**2
     )
 
-
-    assert isinstance(ball_velocity_error, (float))
-    ball_kinetic_energy_error = ball_kinetic_energy* np.sqrt((2*ball_velocity_error/ball_velocity)**2 + (BALL_WEIGHT_ERROR/BALL_WEIGHT)**2)
-
     ## Calculate the total velocity of the hockey stick, by taking the pythagorean sum of the components.
     hockey_stick_place = (hockey_data["X"] ** 2 + hockey_data["Y"] ** 2).sqrt()
-    hockey_stick_place_error = np.sqrt(2) * TRACKING_ACCURACY_METERS
+    hockey_stick_place_error = TRACKING_ACCURACY_METERS
+    ## Using the small angle aproximation.
     hockey_stick_angle = hockey_stick_place/RADIUS
     hockey_stick_angle_error = hockey_stick_place_error/RADIUS
 
+
+    ## use a linear fit to get the angular velocity. The slope is the angular velocity.
     def get_angular_velocity():
         ## Get the time and weights for the model.
         time = np.array([i/FPS for i in range(hockey_stick_angle.len())])
@@ -200,15 +191,7 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
 
     angular_velocity, angular_velocity_error = get_angular_velocity()
 
-    # mean_hockey_stick_velocity = cast(float, hockey_stick_velocity.rolling_mean(window_size = ROLLING_MEAN_N).drop_nulls()[0])
 
-    # hockey_stick_velocity_error = hockey_stick_velocity.rolling_std(window_size= ROLLING_MEAN_N).mean()
-    # assert isinstance(hockey_stick_velocity_error, (float))
-
-    ## Calculate rotation energy for the hockey stick.
-    # angular_velocity = mean_hockey_stick_velocity/RADIUS
-    # angular_velocity_relative_error = np.sqrt((hockey_stick_velocity_error/mean_hockey_stick_velocity)**2 + (RADIUS_ERROR/RADIUS)**2)
-    #
     def get_hockey_stick_inertia_moment(stick_nr):
         return HOCKEY_STICK_INERTIA_MOMENTS[stick_nr-1], HOCKEY_STICK_INERTIA_MOMENT_ERRORS[stick_nr-1]
 
@@ -217,6 +200,7 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
     hockey_stick_rotation_energy = 0.5 * inertia_moment_stick * angular_velocity**2
     hockey_stick_rotation_energy_error = hockey_stick_rotation_energy * np.sqrt((2*angular_velocity_error/angular_velocity)**2 + (inertia_moment_error/inertia_moment_stick)**2)
 
+    ## total energy after is the sum of all the different kinds of energy, the error could cancel partially so we add in quadrature.
     total_energy_after = ball_kinetic_energy+hockey_stick_rotation_energy + height_energy_gained
     total_energy_after_error = np.sqrt(
         ball_kinetic_energy_error**2
@@ -224,7 +208,9 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
         + height_energy_gained_error**2
     )
 
+    ## get the error for q.
     q_error = total_energy_after / energy_before * np.sqrt((total_energy_after_error/total_energy_after)**2 + (energy_before_error/energy_before)**2)
+
     return (
         1 - total_energy_after / energy_before,
         energy_before,

@@ -7,20 +7,15 @@ import polars as pl
 import xy
 from lmfit import Model
 
-
-
 # Measurments with file nr of first measurement and amount of measurements.
 MEASUREMENTS = {1:(4670,6),2:(4680,6),3:(4688,6),4:(4697,5),5:(4708,5)}
 MEASUREMENT_NRS = [4670,4671,4672,4673,4675,4676,4680,4681,4682,4683,4685,4687,4688,4690,4692,4694,4695,4697,4698,4699,4700,4701,4707,4708,4709,4711,4712,4714,4715,4716,4719]
-
 #Placeholder values
-HOCKEY_STICK_INERTIA_MOMENT = 0.165 # in kgm^2
-HOCKEY_STICK_INERTIA_MOMENT_ERROR = 0.00825  # 5%
-HOCKEY_STICK_INERTIA_MOMENTS = [HOCKEY_STICK_INERTIA_MOMENT for _ in range(5)]
-HOCKEY_STICK_INERTIA_MOMENT_ERRORS = [HOCKEY_STICK_INERTIA_MOMENT_ERROR for _ in range(5)]
+HOCKEY_STICK_INERTIA_MOMENTS = [0.16926240240330787,0.18367484458814398,0.17093826777363766,0.17563069081056104,0.1876969214769355]
+HOCKEY_STICK_INERTIA_MOMENT_ERRORS = [inertia *0.05 for inertia in HOCKEY_STICK_INERTIA_MOMENTS]
 
 ## Constants
-BALL_WEIGHT = 165e-3 # in kg
+BALL_WEIGHT = 165e-3 # in kg; gebasseerd op gemiddelde gewicht volgens internet
 BALL_WEIGHT_ERROR = 5e-3 # in kg
 GRAVITATIONAL_ACCELERATION = 9.81 # in m/s^2
 
@@ -38,12 +33,13 @@ ROLLING_MEAN_N = 5
 FPS = 1200
 
 ## Placeholders
-RADIUS = 0.95 # in m
+RADIUS = 85.75e-2 # in m
 RADIUS_ERROR = 0.5e-3 # in m
 
 def main() -> None:
-    convert_raw_data(os.getcwd())
-    process_q_values(os.getcwd())
+     convert_raw_data(os.getcwd())
+     process_q_values(os.getcwd())
+    # comp_vision_measurement_err(os.getcwd())
 
 def convert_raw_data(project_dir):
     """
@@ -140,10 +136,9 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
 
     ## Get the kinetic energy of the ball.
     ## We use a linear fit for the velocity and then the kinetic energy formula to determine the energy.
-    ball_place = (ball_data_after["x"]**2 + ball_data_after["y"]**2).sqrt()
     ## Summing in quadrature of with same uncertainty doesnt change the uncertainty.
     ball_error = TRACKING_ACCURACY_METERS
-    ball_velocity, ball_velocity_error = get_velocities(ball_place, ball_error)
+    ball_velocity, ball_velocity_error = get_velocities(ball_data_after["x"], ball_error)
 
     ## K = 1/2mv^2
     ball_kinetic_energy = 0.5 * BALL_WEIGHT * ball_velocity**2
@@ -152,9 +147,10 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
 
     ## Calculate the energy going to height.
     ## Videos are inverted and y goes down so we take the difference the same way as normal.
+    ## take the max since y velocity isnt taking in to consideration for kinetic energy after.
     rolling_mean_height_after = ball_data_after["y"].rolling_mean(window_size = ROLLING_MEAN_N).drop_nulls()
     rolling_mean_height_before = ball_data_before["y"].rolling_mean(window_size = ROLLING_MEAN_N).drop_nulls()
-    height_difference =  cast(float, rolling_mean_height_after[0]) - cast(float, rolling_mean_height_before[-1])
+    height_difference =  cast(float,(rolling_mean_height_after - cast(float, rolling_mean_height_before[-1])).max())
     ## U = m*g*h
     height_energy_gained = BALL_WEIGHT * GRAVITATIONAL_ACCELERATION * height_difference
     height_energy_gained_error = np.sqrt(
@@ -298,3 +294,45 @@ def process_q_values(project_dir):
     )
 
     chart.to_png("output.png")
+
+
+
+
+
+def comp_vision_measurement_err(project_dir) :
+    ## Get the computer vision data and human data for 4707
+    cv_data =  pl.read_csv(f"{project_dir}\\ball_data_before\\data_DSC_4707_before.csv", separator = ",")
+    human_data =  pl.read_csv(f"{project_dir}\\Results2.csv", separator = ",")
+
+    # Remove duplicate last frame and rescale.
+    cv_data = cv_data.unique(maintain_order=True)
+    cv_data *= PIXEL_SCALING_FACTOR
+
+    # Get the rolling standard deviation to check the internal validity of the measurements.
+    # Since there are basically no forces acting the standard deviation should reveal the uncertainty in the measurement.
+    # Using a rolling std we dont compare the start speed to end speed, this minimizes the effect of any actual forces acting on the ball.
+    print(cast(float,  human_data["X"].diff().mean())*12*3.6, cast(float,cv_data["x"].diff().mean()) *12 *3.6)
+    print(cast(float,  human_data["X"].diff().rolling_std(window_size = 5).mean())*12*3.6, cast(float,cv_data["x"].diff().rolling_std(window_size = 5).mean()) *12 *3.6)
+
+def get_maximum_comp_vision_std(project_dir,window_size):
+    max_seen = 0
+    seen_on= 0
+    speeds = []
+    for metingnr in range(1,6):
+        start_measurement, amount_measurements = MEASUREMENTS[metingnr]
+        start_measurement_index = MEASUREMENT_NRS.index(start_measurement)
+        for i in range(amount_measurements):
+            measurement_nr =MEASUREMENT_NRS[start_measurement_index + i]
+            ball_data_before = pl.read_csv(f"{project_dir}\\ball_data_before\\data_DSC_{measurement_nr}_before.csv", separator = ",")
+            ball_data_before = ball_data_before.unique(maintain_order=True)
+            ball_data_before *= PIXEL_SCALING_FACTOR
+
+            mean_std = ball_data_before["x"].diff().rolling_std(window_size=window_size).mean()
+            avg_speed = cast(float,(ball_data_before["x"].diff(n=DIFF_N)/DIFF_N).mean())*12 * 3.6;
+            speeds.append(avg_speed)
+            ##print(measurement_nr, mean_std)
+            if isinstance(mean_std,float) and mean_std> max_seen :
+                max_seen = mean_std
+                seen_on = measurement_nr
+    print(*[f"{i}: {x:.2f}km/h\n" for i,x in enumerate(speeds)])
+    return max_seen, seen_on

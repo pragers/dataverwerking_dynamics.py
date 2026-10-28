@@ -250,7 +250,7 @@ def process_q_values(project_dir):
     ## Write results to csv file.
     results.write_csv(f"{project_dir}\\output\\total_output.csv")
     ## Get indices for plotting
-    indices = [i for i in range(1,6)]
+    indices = [i+1 for i in range(5)]
 
     ## Create chart with error bars.
     chart = xy.errorbar_chart(
@@ -260,20 +260,22 @@ def process_q_values(project_dir):
             color="#547BA5",
             opacity=0.9,
             corner_radius=4,
-            width=0.65,
         ),
         xy.errorbar(
             indices,
             results["q_mean"].to_numpy(),
             yerr=results["q_error"].to_numpy(),
             color="#202020",
-            width=2,
+            width=1,
+            cap_size = 0.2,
         ),
-        xy.x_axis(label="Hockey stick"),
+        xy.x_axis(label="Stick nr.",
+            tick_count=6),
         xy.y_axis(
             label="Mean energy loss fraction q",
             bounds=(0, 1.1),
             domain = (0, 1.1),
+            tick_count=5
         ),
         xy.theme(
             background="#FFFFFF",
@@ -285,7 +287,8 @@ def process_q_values(project_dir):
         title="Energy loss by hockey stick",
     )
 
-    chart.to_png("output.png")
+    chart.to_png("output.png", width = 848, height =480)
+    chart.to_svg("output.svg")
 
 
 

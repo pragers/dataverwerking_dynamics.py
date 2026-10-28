@@ -34,12 +34,10 @@ TRACKING_ACCURACY_METERS = 0.5/(CM_SCALING_FACTOR*100) # in meters
 DIFF_N = 5
 ROLLING_MEAN_N = 5
 FPS = 1200
-
-## Placeholders
 RADIUS_ERROR = 2e-3 # in m
 
 def main() -> None:
-     convert_raw_data(os.getcwd())
+     #convert_raw_data(os.getcwd())
      process_q_values(os.getcwd())
     # comp_vision_measurement_err(os.getcwd())
 
@@ -61,19 +59,19 @@ def convert_raw_data(project_dir):
         ## open csv to note results.
         with open(f"{project_dir}\\output\\output_meting_{metingnr}.csv", 'w+') as f:
             writer = csv.writer(f, lineterminator="\n")
-            header = ["q","k_before","k_after","k_stick","q_error", "k_before_error", "k_after_error", "k_stick_error"]
+            header = ["q","k_before","k_after","k_stick","q_error", "k_before_error", "k_after_error", "k_stick_error", "velocity","velocity_error", "velocity_after","velocity_after_error"]
             writer.writerow(header)
 
             ## loop over the measurements and calculate q, write the results to the csv for later processing.
             for i in range(amount_measurements):
-                q, k_before, k_after, k_stick, q_error, k_before_error, k_after_error, k_stick_error = get_q(project_dir, metingnr, start_measurement_index + i, i+1)
+                q, k_before, k_after, k_stick, q_error, k_before_error, k_after_error, k_stick_error, velocity, velocity_error, velocity_after, velocity_after_error = get_q(project_dir, metingnr, start_measurement_index + i, i+1)
                 print(f"""Measurement {MEASUREMENT_NRS[start_measurement_index + i]}:
     Ratio of energy lost: {q}
     Kinetic energy before collision: {k_before} joule
     Kinetic energy after collision: {k_after} joule
     Hockey stick rotation energy: {k_stick} joule
                     """)
-                writer.writerow([q, k_before, k_after, k_stick, q_error, k_before_error, k_after_error, k_stick_error])
+                writer.writerow([q, k_before, k_after, k_stick, q_error, k_before_error, k_after_error, k_stick_error,velocity, velocity_error, velocity_after, velocity_after_error ])
 
 
 
@@ -128,8 +126,13 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
         slope_parameter = result.params.get("a")
 
         return slope_parameter.value, slope_parameter.stderr
-    velocity, velocity_error = get_velocities(ball_data_before["x"], TRACKING_ACCURACY_METERS)
-
+    velocity_x, velocity_error_x = get_velocities(ball_data_before["x"], TRACKING_ACCURACY_METERS)
+    velocity_y, velocity_error_y = get_velocities(ball_data_before["y"], TRACKING_ACCURACY_METERS)
+    velocity = np.sqrt(velocity_x**2 + velocity_y**2)
+    velocity_error = np.sqrt(
+        (velocity_x * velocity_error_x)**2 +
+        (velocity_y * velocity_error_y)**2
+    ) / velocity
     ## K = 1/2mv^2
     energy_before = 0.5 * BALL_WEIGHT * velocity ** 2
     energy_before_error = energy_before * np.sqrt((BALL_WEIGHT_ERROR/BALL_WEIGHT)**2 + (2*velocity_error/velocity)**2)
@@ -209,6 +212,9 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
         energy_before_error,
         ball_kinetic_energy_error,
         hockey_stick_rotation_energy_error,
+        velocity *3.6, velocity_error *3.6,
+        ball_velocity *3.6,
+        ball_velocity_error *3.6,
     )
 
 
@@ -227,9 +233,20 @@ def process_q_values(project_dir):
         }
     )
     ## Loop over the sticks and calculate the mean and the errors.
+    measurement_data_velocities = []
+    indices = ["Wood", "20% carbon", "50% carbon","70% carbon","100% carbon"]
     for i in range(1,6):
         ## load data
         measurement_data = pl.read_csv(f"{project_dir}\\output\\output_meting_{i}.csv", separator = ",")
+        measurement_data_velocities.append(
+            measurement_data.select(
+                pl.lit(indices[i - 1]).alias("stick"),
+                "velocity",
+                "velocity_error",
+                "velocity_after",
+                "velocity_after_error",
+            )
+        )
 
         q = measurement_data["q"]
         q_error = measurement_data["q_error"]
@@ -247,10 +264,10 @@ def process_q_values(project_dir):
             "q_error": q_mean_error,
         })
         results.extend(data_frame)
+    measurement_data_velocities = pl.concat(measurement_data_velocities)
     ## Write results to csv file.
     results.write_csv(f"{project_dir}\\output\\total_output.csv")
-    ## Get indices for plotting
-    indices = [i+1 for i in range(5)]
+
 
     ## Create chart with error bars.
     chart = xy.errorbar_chart(
@@ -269,7 +286,7 @@ def process_q_values(project_dir):
             width=1,
             cap_size = 0.2,
         ),
-        xy.x_axis(label="Stick nr.",
+        xy.x_axis(label="Stick composition",
             tick_count=6),
         xy.y_axis(
             label="Mean energy loss fraction q",
@@ -289,6 +306,59 @@ def process_q_values(project_dir):
 
     chart.to_png("output.png", width = 848, height =480)
     chart.to_svg("output.svg")
+
+    chart = xy.errorbar_chart(
+        xy.errorbar(
+            measurement_data_velocities["stick"].to_list(),
+            measurement_data_velocities["velocity"].to_numpy(),
+            yerr=measurement_data_velocities["velocity_error"].to_numpy(),
+            color="#2563EB",
+            width=1.5,
+            cap_size=0.015,
+        ),
+        xy.scatter(
+            measurement_data_velocities["stick"].to_list(),
+            measurement_data_velocities["velocity"].to_numpy(),
+            name="Before collision",
+            color="#2563EB",
+        ),
+        xy.errorbar(
+            measurement_data_velocities["stick"].to_list(),
+            measurement_data_velocities["velocity_after"].to_numpy(),
+            yerr=measurement_data_velocities["velocity_after_error"].to_numpy(),
+            color="#DC2626",
+            width=1.5,
+            cap_size=0.015,
+        ),
+        xy.scatter(
+            measurement_data_velocities["stick"].to_list(),
+            measurement_data_velocities["velocity_after"].to_numpy(),
+            name="After collision",
+            color="#DC2626",
+        ),
+        xy.x_axis(
+            label="Stick composition",
+            tick_count=6,
+        ),
+        xy.y_axis(
+            label="Velocity (km/h)",
+            bounds=(0, 55),
+            domain=(0, 55),
+            tick_count=6,
+        ),
+        xy.theme(
+            background="#FFFFFF",
+            plot_background="#FFFFFF",
+            grid_color="#E5E7EB",
+            axis_color="#6B7280",
+            text_color="#111827",
+        ),
+        xy.legend(show=True),
+        title="Velocity by stick composition",
+    )
+
+    chart.to_png("output1.png", width=848, height=480)
+    chart.to_svg("output1.svg")
 
 
 

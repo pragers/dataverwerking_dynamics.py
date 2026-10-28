@@ -7,6 +7,8 @@ wheels/
 *.egg-info
 output/*
 output.png
+output*.*
+output.*
 
 # Virtual environments
 .venv

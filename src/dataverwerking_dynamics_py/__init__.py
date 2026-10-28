@@ -14,6 +14,7 @@ MEASUREMENT_NRS = [4670,4671,4672,4673,4675,4676,4680,4681,4682,4683,4685,4687,4
 HOCKEY_STICK_INERTIA_MOMENTS = [0.16926240240330787,0.18367484458814398,0.17093826777363766,0.17563069081056104,0.1876969214769355]
 HOCKEY_STICK_INERTIA_MOMENT_ERRORS = [0.005205745715940083, 0.005648079287620812, 0.005257176004501276,0.0054011864454451865, 0.005771533389105767]
 HOCKEY_STICK_RADIUS = [0.421,0.42,0.409,0.405,0.406]
+RADIUS_OFFSET = 0.02
 
 ## Constants
 BALL_WEIGHTS = np.array([160e-3,157e-3,155e-3,161e-3,157e-3,155e-3]) # in kg
@@ -137,37 +138,29 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
     ## Get the kinetic energy of the ball.
     ## We use a linear fit for the velocity and then the kinetic energy formula to determine the energy.
     ## Summing in quadrature of with same uncertainty doesnt change the uncertainty.
-    ball_error = np.sqrt(2)* TRACKING_ACCURACY_METERS
-    ball_velocity, ball_velocity_error = get_velocities(np.sqrt(ball_data_after["x"]**2 + ball_data_after["y"]**2) , ball_error)
-
+    ball_error = TRACKING_ACCURACY_METERS
+    ball_velocity_x, ball_velocity_error_x = get_velocities(ball_data_after["x"] , ball_error)
+    ball_velocity_y, ball_velocity_error_y = get_velocities(ball_data_after["y"] , ball_error)
+    ball_velocity = np.sqrt(ball_velocity_x**2 + ball_velocity_y**2)
+    ball_velocity_error = np.sqrt(
+        (ball_velocity_x * ball_velocity_error_x)**2 +
+        (ball_velocity_y * ball_velocity_error_y)**2
+    ) / ball_velocity
     ## K = 1/2mv^2
     ball_kinetic_energy = 0.5 * BALL_WEIGHT * ball_velocity**2
     ball_kinetic_energy_error = ball_kinetic_energy * np.sqrt((BALL_WEIGHT_ERROR/BALL_WEIGHT)**2 + (2*ball_velocity_error/ball_velocity)**2)
 
 
-    # ## Calculate the energy going to height.
-    # ## Videos are inverted and y goes down so we take the difference the same way as normal.
-    # ## take the max since y velocity isnt taking in to consideration for kinetic energy after.
-    # rolling_mean_height_after = ball_data_after["y"].rolling_mean(window_size = ROLLING_MEAN_N).drop_nulls()
-    # rolling_mean_height_before = ball_data_before["y"].rolling_mean(window_size = ROLLING_MEAN_N).drop_nulls()
-    # height_difference =  cast(float,(rolling_mean_height_after - cast(float, rolling_mean_height_before[-1])).max())
-    # ## U = m*g*h
-    # height_energy_gained = BALL_WEIGHT * GRAVITATIONAL_ACCELERATION * height_difference
-    # height_energy_gained_error = np.sqrt(
-    #     (GRAVITATIONAL_ACCELERATION
-    #      * height_difference * BALL_WEIGHT_ERROR)**2
-    #     + (BALL_WEIGHT
-    #        * GRAVITATIONAL_ACCELERATION
-    #        * ball_velocity_error)**2
-    # )
-
     ## Calculate the total velocity of the hockey stick, by taking the pythagorean sum of the components.
-    hockey_stick_place = (hockey_data["X"] ** 2 + hockey_data["Y"] ** 2).sqrt()
-    hockey_stick_place_error = TRACKING_ACCURACY_METERS
+    hockey_stick_place = ((hockey_data["X"]- hockey_data["X"][0])** 2 + (hockey_data["Y"] - hockey_data["Y"][0]) ** 2).sqrt()
+    hockey_stick_place_error = np.sqrt(2) * TRACKING_ACCURACY_METERS
     ## Using the small angle aproximation.
-    radius = HOCKEY_STICK_RADIUS[stick_nr-1]
+    radius = HOCKEY_STICK_RADIUS[stick_nr-1] + RADIUS_OFFSET
     hockey_stick_angle = hockey_stick_place/radius
-    hockey_stick_angle_error = hockey_stick_angle* np.sqrt( (hockey_stick_place_error/hockey_stick_place)**2 + (RADIUS_ERROR/radius)**2)
+    hockey_stick_angle_error = (
+        (hockey_stick_place_error / radius)**2
+        + (hockey_stick_place * np.sqrt(2) * RADIUS_ERROR / radius**2)**2
+    ).sqrt() ## we use this rewritten version of the absolute error to prevent division by zero error
 
 
     ## use a linear fit to get the angular velocity. The slope is the angular velocity.
@@ -279,7 +272,8 @@ def process_q_values(project_dir):
         xy.x_axis(label="Hockey stick"),
         xy.y_axis(
             label="Mean energy loss fraction q",
-            bounds=(0, 1),
+            bounds=(0, 1.1),
+            domain = (0, 1.1),
         ),
         xy.theme(
             background="#FFFFFF",

@@ -13,10 +13,12 @@ MEASUREMENT_NRS = [4670,4671,4672,4673,4675,4676,4680,4681,4682,4683,4685,4687,4
 #Placeholder values
 HOCKEY_STICK_INERTIA_MOMENTS = [0.16926240240330787,0.18367484458814398,0.17093826777363766,0.17563069081056104,0.1876969214769355]
 HOCKEY_STICK_INERTIA_MOMENT_ERRORS = [0.005205745715940083, 0.005648079287620812, 0.005257176004501276,0.0054011864454451865, 0.005771533389105767]
+HOCKEY_STICK_RADIUS = [0.421,0.42,0.409,0.405,0.406]
 
 ## Constants
-BALL_WEIGHT = 165e-3 # in kg; gebasseerd op gemiddelde gewicht volgens internet
-BALL_WEIGHT_ERROR = 5e-3 # in kg
+BALL_WEIGHTS = np.array([160e-3,157e-3,155e-3,161e-3,157e-3,155e-3]) # in kg
+BALL_WEIGHT = BALL_WEIGHTS.mean()
+BALL_WEIGHT_ERROR = 1e-3/np.sqrt(BALL_WEIGHTS.size) # in kg
 GRAVITATIONAL_ACCELERATION = 9.81 # in m/s^2
 
 ## Video related constants
@@ -33,8 +35,7 @@ ROLLING_MEAN_N = 5
 FPS = 1200
 
 ## Placeholders
-RADIUS = 85.75e-2 # in m
-RADIUS_ERROR = 0.5e-3 # in m
+RADIUS_ERROR = 2e-3 # in m
 
 def main() -> None:
      convert_raw_data(os.getcwd())
@@ -59,20 +60,19 @@ def convert_raw_data(project_dir):
         ## open csv to note results.
         with open(f"{project_dir}\\output\\output_meting_{metingnr}.csv", 'w+') as f:
             writer = csv.writer(f, lineterminator="\n")
-            header = ["q","k_before","k_after","u_height","k_stick","q_error", "k_before_error", "k_after_error", "u_height_error", "k_stick_error"]
+            header = ["q","k_before","k_after","k_stick","q_error", "k_before_error", "k_after_error", "k_stick_error"]
             writer.writerow(header)
 
             ## loop over the measurements and calculate q, write the results to the csv for later processing.
             for i in range(amount_measurements):
-                q, k_before, k_after, u_height, k_stick, q_error, k_before_error, k_after_error, u_height_error, k_stick_error = get_q(project_dir, metingnr, start_measurement_index + i, i+1)
+                q, k_before, k_after, k_stick, q_error, k_before_error, k_after_error, k_stick_error = get_q(project_dir, metingnr, start_measurement_index + i, i+1)
                 print(f"""Measurement {MEASUREMENT_NRS[start_measurement_index + i]}:
     Ratio of energy lost: {q}
     Kinetic energy before collision: {k_before} joule
     Kinetic energy after collision: {k_after} joule
     Hockey stick rotation energy: {k_stick} joule
-    Ball height energy energy: {u_height} joule\n
                     """)
-                writer.writerow([q, k_before, k_after, u_height, k_stick, q_error, k_before_error, k_after_error, u_height_error, k_stick_error])
+                writer.writerow([q, k_before, k_after, k_stick, q_error, k_before_error, k_after_error, k_stick_error])
 
 
 
@@ -137,43 +137,44 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
     ## Get the kinetic energy of the ball.
     ## We use a linear fit for the velocity and then the kinetic energy formula to determine the energy.
     ## Summing in quadrature of with same uncertainty doesnt change the uncertainty.
-    ball_error = TRACKING_ACCURACY_METERS
-    ball_velocity, ball_velocity_error = get_velocities(ball_data_after["x"], ball_error)
+    ball_error = np.sqrt(2)* TRACKING_ACCURACY_METERS
+    ball_velocity, ball_velocity_error = get_velocities(np.sqrt(ball_data_after["x"]**2 + ball_data_after["y"]**2) , ball_error)
 
     ## K = 1/2mv^2
     ball_kinetic_energy = 0.5 * BALL_WEIGHT * ball_velocity**2
     ball_kinetic_energy_error = ball_kinetic_energy * np.sqrt((BALL_WEIGHT_ERROR/BALL_WEIGHT)**2 + (2*ball_velocity_error/ball_velocity)**2)
 
 
-    ## Calculate the energy going to height.
-    ## Videos are inverted and y goes down so we take the difference the same way as normal.
-    ## take the max since y velocity isnt taking in to consideration for kinetic energy after.
-    rolling_mean_height_after = ball_data_after["y"].rolling_mean(window_size = ROLLING_MEAN_N).drop_nulls()
-    rolling_mean_height_before = ball_data_before["y"].rolling_mean(window_size = ROLLING_MEAN_N).drop_nulls()
-    height_difference =  cast(float,(rolling_mean_height_after - cast(float, rolling_mean_height_before[-1])).max())
-    ## U = m*g*h
-    height_energy_gained = BALL_WEIGHT * GRAVITATIONAL_ACCELERATION * height_difference
-    height_energy_gained_error = np.sqrt(
-        (GRAVITATIONAL_ACCELERATION
-         * height_difference * BALL_WEIGHT_ERROR)**2
-        + (BALL_WEIGHT
-           * GRAVITATIONAL_ACCELERATION
-           * ball_velocity_error)**2
-    )
+    # ## Calculate the energy going to height.
+    # ## Videos are inverted and y goes down so we take the difference the same way as normal.
+    # ## take the max since y velocity isnt taking in to consideration for kinetic energy after.
+    # rolling_mean_height_after = ball_data_after["y"].rolling_mean(window_size = ROLLING_MEAN_N).drop_nulls()
+    # rolling_mean_height_before = ball_data_before["y"].rolling_mean(window_size = ROLLING_MEAN_N).drop_nulls()
+    # height_difference =  cast(float,(rolling_mean_height_after - cast(float, rolling_mean_height_before[-1])).max())
+    # ## U = m*g*h
+    # height_energy_gained = BALL_WEIGHT * GRAVITATIONAL_ACCELERATION * height_difference
+    # height_energy_gained_error = np.sqrt(
+    #     (GRAVITATIONAL_ACCELERATION
+    #      * height_difference * BALL_WEIGHT_ERROR)**2
+    #     + (BALL_WEIGHT
+    #        * GRAVITATIONAL_ACCELERATION
+    #        * ball_velocity_error)**2
+    # )
 
     ## Calculate the total velocity of the hockey stick, by taking the pythagorean sum of the components.
     hockey_stick_place = (hockey_data["X"] ** 2 + hockey_data["Y"] ** 2).sqrt()
     hockey_stick_place_error = TRACKING_ACCURACY_METERS
     ## Using the small angle aproximation.
-    hockey_stick_angle = hockey_stick_place/RADIUS
-    hockey_stick_angle_error = hockey_stick_place_error/RADIUS
+    radius = HOCKEY_STICK_RADIUS[stick_nr-1]
+    hockey_stick_angle = hockey_stick_place/radius
+    hockey_stick_angle_error = hockey_stick_angle* np.sqrt( (hockey_stick_place_error/hockey_stick_place)**2 + (RADIUS_ERROR/radius)**2)
 
 
     ## use a linear fit to get the angular velocity. The slope is the angular velocity.
     def get_angular_velocity():
         ## Get the time and weights for the model.
         time = np.array([i/FPS for i in range(hockey_stick_angle.len())])
-        angle_weights = np.array([1/hockey_stick_angle_error for _ in range(hockey_stick_angle.len())])
+        angle_weights = 1/ hockey_stick_angle_error.to_numpy()
 
         ## Create the model, function is expected to be linear.
         angular_velocity_model = Model(linear)
@@ -197,11 +198,10 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
     hockey_stick_rotation_energy_error = hockey_stick_rotation_energy * np.sqrt((2*angular_velocity_error/angular_velocity)**2 + (inertia_moment_error/inertia_moment_stick)**2)
 
     ## total energy after is the sum of all the different kinds of energy, the error could cancel partially so we add in quadrature.
-    total_energy_after = ball_kinetic_energy+hockey_stick_rotation_energy + height_energy_gained
+    total_energy_after = ball_kinetic_energy+hockey_stick_rotation_energy
     total_energy_after_error = np.sqrt(
         ball_kinetic_energy_error**2
         + hockey_stick_rotation_energy_error**2
-        + height_energy_gained_error**2
     )
 
     ## get the error for q.
@@ -211,12 +211,10 @@ def get_q(project_dir, stick_nr : int, measurement_index : int, measurement_nr: 
         1 - total_energy_after / energy_before,
         energy_before,
         ball_kinetic_energy,
-        height_energy_gained,
         hockey_stick_rotation_energy,
         q_error,
         energy_before_error,
         ball_kinetic_energy_error,
-        height_energy_gained_error,
         hockey_stick_rotation_energy_error,
     )
 
